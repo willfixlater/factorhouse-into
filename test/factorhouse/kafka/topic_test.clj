@@ -7,9 +7,7 @@
   (is (= data/sizes
          (topic/sizes data/topics))))
 
-;; TODO: Optional Bonus Extension!
 (deftest categories
-
   (is (= data/categories-physical
          (topic/categories-physical data/sizes)))
 

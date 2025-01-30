@@ -3,9 +3,7 @@
             [factorhouse.kafka.topic :as topic]
             [factorhouse.test.data :as data]))
 
-;; TODO: Technical Challenge! Make the test pass.
 (deftest sizes
-
   (is (= data/sizes
          (topic/sizes data/topics))))
 

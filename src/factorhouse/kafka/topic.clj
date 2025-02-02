@@ -1,5 +1,6 @@
 (ns factorhouse.kafka.topic
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [factorhouse.test.data :as data]))
 
 ;; Technical Challenge! Implement this function.
 
@@ -31,58 +32,65 @@
 (defn ->id [& idxs]
   (str/join "." idxs))
 
+(defn ->category [id name size & {:keys [parent]}]
+  (cond-> {:id id
+           :name name
+           :size size}
+    parent (assoc :parent parent)))
+
+(defn sum-size-of-sizes [sizes]
+  (transduce (map :size) + sizes))
+
 (defn categories-physical
   "Transform topic sizes into categorised physical view"
   [sizes]
-  (mapcat identity
-          (map-indexed (fn [i xs]
-                         (into
-                          [{:id (->id i)
-                            :name (:broker (first xs))
-                            :size (transduce (map :size) + xs)}]
-                          (mapcat identity)
-                          (map-indexed (fn [j ys]
-                                         (into
-                                          [{:id (->id i j)
-                                            :name (:topic (first ys))
-                                            :parent (->id i)
-                                            :size (transduce (map :size) + ys)}]
-                                          (map-indexed (fn [k zs]
-                                                         {:id (->id i j k)
-                                                          :name (:partition (first zs))
-                                                          :parent (->id i j)
-                                                          :size (transduce (map :size) + zs)})
-                                                       (partition-by :partition ys))))
-                                       (partition-by :topic xs))))
-                       (partition-by :broker sizes))))
+  (let [by-broker (group-by :broker sizes)
+        by-broker-and-topic (update-vals by-broker #(group-by :topic %))
+        by-broker-and-topic-and-partition
+        (update-vals by-broker-and-topic
+                     (fn [by-topic]
+                       (update-vals by-topic
+                                    #(group-by :partition %))))]
+    (->> (sort-by key by-broker)
+         (map-indexed #(into [%1] %2))
+         (mapcat
+          (fn [[i broker broker-sizes]]
+            (conj (->> (sort-by key (by-broker-and-topic broker))
+                       (map-indexed #(into [%1] %2))
+                       (mapcat
+                        (fn [[j topic topic-sizes]]
+                          (conj (->> (sort-by key (get-in by-broker-and-topic-and-partition
+                                                          [broker topic]))
+                                     (map-indexed #(into [%1] %2))
+                                     (map (fn [[k partition partition-sizes]]
+                                            (->category (->id i j k)
+                                                        partition
+                                                        (sum-size-of-sizes partition-sizes)
+                                                        :parent (->id i j)))))
+                                (->category (->id i j)
+                                            topic
+                                            (sum-size-of-sizes topic-sizes)
+                                            :parent (->id i))))))
+                  (->category (->id i)
+                              broker
+                              (sum-size-of-sizes broker-sizes))))))))
 
 (defn categories-logical
   "Transform topic sizes into categorised logical view"
   [sizes]
-  (let [by-broker (partition-by :broker sizes)
-        by-broker-by-topic (map #(partition-by :topic %) by-broker)
-        topic->partition-sizes (apply mapcat
-                                      (fn [& by-topic]
-                                        (apply map
-                                               (fn [& xs]
-                                                 (reduce (fn [a b]
-                                                           (update a :size
-                                                                   + (:size b)))
-                                                         xs))
-                                               by-topic))
-                                      by-broker-by-topic)]
-    (mapcat identity
-            (map-indexed (fn [i xs]
-                           (into
-                            [{:id (->id i)
-                              :name (:topic (first xs))
-                              :size (transduce (map :size) + xs)}]
-                            (mapcat identity)
-                            (map-indexed (fn [j ys]
-                                           (into
-                                            [{:id (->id i j)
-                                              :name (:partition (first ys))
-                                              :parent (->id i)
-                                              :size (transduce (map :size) + ys)}]))
-                                         (partition-by :partition xs))))
-                         (partition-by :topic topic->partition-sizes)))))
+  (let [by-topic (group-by :topic sizes)
+        by-topic-and-partition (update-vals by-topic #(group-by :partition %))]
+    (->> (sort-by key by-topic)
+         (map-indexed #(into [%1] %2))
+         (mapcat (fn [[i topic topic-sizes]]
+                   (conj (map-indexed
+                          (fn [j [partition t-and-p-sizes]]
+                            (->category (->id i j)
+                                        partition
+                                        (sum-size-of-sizes t-and-p-sizes)
+                                        :parent (->id i)))
+                          (sort-by key (by-topic-and-partition topic)))
+                         (->category (->id i)
+                                     topic
+                                     (sum-size-of-sizes topic-sizes))))))))
+

@@ -6,5 +6,7 @@
                  [org.clojure/tools.logging "1.3.0"]
                  [ch.qos.logback/logback-classic "1.3.15"]
                  [clj-kondo "2024.11.14"]]
+  
+  :profiles {:test {:dependencies [[org.clojure/test.check "1.1.1"]]}}
 
   :aliases {"kondo" ["run" "-m" "clj-kondo.main" "--lint" "src:test" "--parallel"]})

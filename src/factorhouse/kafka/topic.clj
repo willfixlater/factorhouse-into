@@ -1,6 +1,5 @@
 (ns factorhouse.kafka.topic
-  (:require [clojure.string :as str]
-            [factorhouse.test.data :as data]))
+  (:require [clojure.string :as str]))
 
 ;; Technical Challenge! Implement this function.
 

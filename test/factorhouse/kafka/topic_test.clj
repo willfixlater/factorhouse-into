@@ -85,6 +85,16 @@
    (nat-int? size)
    (or (nil? parent) (valid-id? parent))))
 
+(defn sub-id
+  ([id start]
+   (apply topic/->id (subvec (id->ints id) start)))
+  ([id start end]
+   (apply topic/->id (subvec (id->ints id) start end))))
+
+(defn sum-size-of-sizes-by [categories sizes]
+  (update-vals (group-by (apply juxt categories) sizes)
+               topic/sum-size-of-sizes))
+
 (def sizes-count-prop
   "The count of returned sizes should be equal to the count of all the
    replica-info in the provided topics map."
@@ -177,6 +187,44 @@
         check (tc/quick-check *num-prop-tests* prop)]
     (is (:pass? check) (str "Failed with seed: " (:seed check)))))
 
+(def categories-physical-size-prop
+  "The size of all returned categories should be equal to the sum of the sizes
+   of the corresponding broker, broker-topic pair or broker-topic-parition
+   triplet."
+  (prop/for-all [sizes (gen/resize 100 (gen/vector *size-gen*))]
+    (let [names->broker-size (sum-size-of-sizes-by [:broker] sizes)
+          names->topic-size (sum-size-of-sizes-by [:broker :topic] sizes)
+          names->partition-size (sum-size-of-sizes-by
+                                 [:broker :topic :partition]
+                                 sizes)
+          categories (topic/categories-physical sizes)
+          broker-id->names (->> categories
+                                (filter #(= 1 (count (id->ints (:id %)))))
+                                (map (juxt :id (comp vector :name)))
+                                (into {}))
+          topic-id->names (->> categories
+                               (filter #(= 2 (count (id->ints (:id %)))))
+                               (map (juxt :id #(conj (broker-id->names
+                                                      (sub-id (:id %) 0 1))
+                                                     (:name %))))
+                               (into {}))
+          partition-id->names (->> categories
+                                   (filter #(= 3 (count (id->ints (:id %)))))
+                                   (map (juxt :id #(conj (topic-id->names
+                                                          (sub-id (:id %) 0 2))
+                                                         (:name %))))
+                                   (into {}))
+          ids->sizes (merge
+                      (update-vals broker-id->names names->broker-size)
+                      (update-vals topic-id->names names->topic-size)
+                      (update-vals partition-id->names names->partition-size))]
+      (every? #(= (:size %) (ids->sizes (:id %))) categories))))
+
+(deftest categories-physical-size
+  (let [prop categories-physical-size-prop
+        check (tc/quick-check *num-prop-tests* prop)]
+    (is (:pass? check) (str "Failed with seed: " (:seed check)))))
+
 (def categories-logical-count-prop
   "The count of returned categories should be equal to the count of all topics,
    plus the count of all topic-partition pairs."
@@ -212,6 +260,35 @@
 
 (deftest categories-logical-structure
   (let [prop categories-logical-structure-prop
+        check (tc/quick-check *num-prop-tests* prop)]
+    (is (:pass? check) (str "Failed with seed: " (:seed check)))))
+
+(def categories-logical-size-prop
+  "The size of all returned categories should be equal to the sum of the sizes
+   of the corresponding topic or topic-partition pair"
+  (prop/for-all [sizes (gen/resize 100 (gen/vector *size-gen*))]
+                (let [names->topic-size (sum-size-of-sizes-by [:topic] sizes)
+                      names->partition-size (sum-size-of-sizes-by
+                                             [:topic :partition]
+                                             sizes)
+                      categories (topic/categories-logical sizes)
+                      topic-id->names (->> categories
+                                           (filter #(= 1 (count (id->ints (:id %)))))
+                                           (map (juxt :id (comp vector :name)))
+                                           (into {}))
+                      partition-id->names (->> categories
+                                               (filter #(= 2 (count (id->ints (:id %)))))
+                                               (map (juxt :id #(conj (topic-id->names
+                                                                      (sub-id (:id %) 0 1))
+                                                                     (:name %))))
+                                               (into {}))
+                      ids->sizes (merge
+                                  (update-vals topic-id->names names->topic-size)
+                                  (update-vals partition-id->names names->partition-size))]
+                  (every? #(= (:size %) (ids->sizes (:id %))) categories))))
+
+(deftest categories-logical-size
+  (let [prop categories-logical-size-prop
         check (tc/quick-check *num-prop-tests* prop)]
     (is (:pass? check) (str "Failed with seed: " (:seed check)))))
 

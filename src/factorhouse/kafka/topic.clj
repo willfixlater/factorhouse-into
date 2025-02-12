@@ -31,65 +31,68 @@
 (defn ->id [& idxs]
   (str/join "." idxs))
 
-(defn ->category [id name size & {:keys [parent]}]
+(defn ->category [id name & {:keys [parent props]}]
   (cond-> {:id id
-           :name name
-           :size size}
-    parent (assoc :parent parent)))
+           :name name}
+    parent (assoc :parent parent)
+    props (merge props)))
 
-(defn sum-size-of-sizes [sizes]
+(defn- sum-size-of-sizes [sizes]
   (transduce (map :size) + sizes))
+
+(defn- make-category-ctxs [category sizes & {:keys [parent-idxs]
+                                             :or {parent-idxs []}}]
+  (map-indexed
+   (fn [idx [name category-sizes]]
+     [idx parent-idxs name category-sizes])
+   (->> sizes
+        (group-by category)
+        (sort-by key))))
+
+(defn- apply-windows [windows sizes]
+  (reduce (fn [acc [window-key window-fn]]
+            (assoc acc window-key (window-fn sizes)))
+          {}
+          windows))
+
+(defn- by-categories [category-fns windows sizes]
+  (when-let [[first-category-fn] (seq category-fns)]
+    (loop [acc []
+           [category-ctx & category-ctxs] (make-category-ctxs first-category-fn
+                                                              sizes)]
+      (if-not category-ctx
+        acc
+        (let [[idx parent-idxs name category-sizes] category-ctx
+              category-fns-cursor (inc (count parent-idxs))
+              category-idxs (conj parent-idxs idx)
+              category-id (apply ->id category-idxs)
+              category-props (apply-windows windows category-sizes)
+              category-opts (cond-> {:props category-props}
+                              (seq parent-idxs)
+                              (assoc :parent (apply ->id parent-idxs)))
+              category (->category category-id name category-opts)
+              next-category-fn (get category-fns category-fns-cursor)
+              next-category-ctxs (if-not next-category-fn
+                                   []
+                                   (make-category-ctxs
+                                    next-category-fn
+                                    category-sizes
+                                    :parent-idxs category-idxs))]
+          (recur (conj acc category)
+                 (concat next-category-ctxs
+                         category-ctxs)))))))
 
 (defn categories-physical
   "Transform topic sizes into categorised physical view"
   [sizes]
-  (let [by-broker (group-by :broker sizes)
-        by-broker-and-topic (update-vals by-broker #(group-by :topic %))
-        by-broker-and-topic-and-partition
-        (update-vals by-broker-and-topic
-                     (fn [by-topic]
-                       (update-vals by-topic
-                                    #(group-by :partition %))))]
-    (->> (sort-by key by-broker)
-         (map-indexed #(into [%1] %2))
-         (mapcat
-          (fn [[i broker broker-sizes]]
-            (conj (->> (sort-by key (by-broker-and-topic broker))
-                       (map-indexed #(into [%1] %2))
-                       (mapcat
-                        (fn [[j topic topic-sizes]]
-                          (conj (->> (sort-by key (get-in by-broker-and-topic-and-partition
-                                                          [broker topic]))
-                                     (map-indexed #(into [%1] %2))
-                                     (map (fn [[k partition partition-sizes]]
-                                            (->category (->id i j k)
-                                                        partition
-                                                        (sum-size-of-sizes partition-sizes)
-                                                        :parent (->id i j)))))
-                                (->category (->id i j)
-                                            topic
-                                            (sum-size-of-sizes topic-sizes)
-                                            :parent (->id i))))))
-                  (->category (->id i)
-                              broker
-                              (sum-size-of-sizes broker-sizes))))))))
+  (by-categories [:broker :topic :partition]
+                 {:size sum-size-of-sizes}
+                 sizes))
 
 (defn categories-logical
   "Transform topic sizes into categorised logical view"
   [sizes]
-  (let [by-topic (group-by :topic sizes)
-        by-topic-and-partition (update-vals by-topic #(group-by :partition %))]
-    (->> (sort-by key by-topic)
-         (map-indexed #(into [%1] %2))
-         (mapcat (fn [[i topic topic-sizes]]
-                   (conj (map-indexed
-                          (fn [j [partition t-and-p-sizes]]
-                            (->category (->id i j)
-                                        partition
-                                        (sum-size-of-sizes t-and-p-sizes)
-                                        :parent (->id i)))
-                          (sort-by key (by-topic-and-partition topic)))
-                         (->category (->id i)
-                                     topic
-                                     (sum-size-of-sizes topic-sizes))))))))
+  (by-categories [:topic :partition]
+                 {:size sum-size-of-sizes}
+                 sizes))
 
